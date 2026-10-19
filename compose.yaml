@@ -1,0 +1,6 @@
+name: catalog-service-hello-local
+services:
+  catalog:
+    build: .
+    ports:
+      - "127.0.0.1:38082:8080"

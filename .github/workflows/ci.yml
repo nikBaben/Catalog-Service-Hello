@@ -1,0 +1,73 @@
+name: Test, publish and update Deployment
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: catalog-hello-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.2"
+          cache: false
+      - run: go test ./...
+  publish:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/nikbaben/catalog-service-hello
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Build and publish image
+        id: image
+        run: |
+          docker build --pull --tag "$IMAGE:$GITHUB_SHA" --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" .
+          docker push "$IMAGE:$GITHUB_SHA"
+          REF=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$GITHUB_SHA")
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Published: $REF" >> "$GITHUB_STEP_SUMMARY"
+      - name: Download Deployment repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: nikBaben/Deployment-Hello
+          ref: main
+          ssh-key: ${{ secrets.DEPLOYMENT_REPO_SSH_KEY }}
+          path: deployment
+      - name: Update deployed version
+        working-directory: deployment
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: |
+          git config user.name "hello-release-bot"
+          git config user.email "hello-release-bot@users.noreply.github.com"
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard FETCH_HEAD
+            printf 'CATALOG_IMAGE=%s\n' "$IMAGE_REF" > catalog.env
+            git add catalog.env
+            if git diff --cached --quiet; then exit 0; fi
+            git commit -m "Deploy Catalog-Service-Hello $GITHUB_SHA"
+            if git push origin HEAD:main; then exit 0; fi
+            sleep 2
+          done
+          echo "Could not update Deployment after 5 attempts" >&2
+          exit 1
