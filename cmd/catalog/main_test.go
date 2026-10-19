@@ -13,6 +13,9 @@ func TestCatalogResponse(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
+	if response.Header().Get("X-Service") != "catalog" {
+		t.Fatalf("X-Service = %q, want catalog", response.Header().Get("X-Service"))
+	}
 	if response.Body.String() != "hello from catalog" {
 		t.Fatalf("body = %q, want hello from catalog", response.Body.String())
 	}
